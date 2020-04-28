@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -9,6 +10,27 @@ import (
 	"github.com/go-redis/redis/v8"
 	"github.com/stretchr/testify/assert"
 )
+
+func ExampleNewLimiter() {
+	mr, _ := miniredis.Run()
+	ring := redis.NewRing(&redis.RingOptions{
+		Addrs: map[string]string{"server0": mr.Addr()},
+	})
+	ctx := context.Background()
+
+	l := NewLimiter(ring, nil)
+	r, _ := l.Inc(ctx, "foo:123", NewLimit(10, time.Minute*10))
+
+	if !r.Allowed {
+		return // concurrency limit kicked in
+	}
+
+	// Process request
+	fmt.Println(r.Remaining)
+
+	l.Decr(ctx, r)
+	// Output: 9
+}
 
 func BenchmarkIncDecr(b *testing.B) {
 	l, _ := flightlimit()
@@ -71,13 +93,13 @@ func TestKeyConflict(t *testing.T) {
 	defer l.Close()
 	limit := NewLimit(2, time.Hour)
 
-	// Key 1
+	// Unique Key 1
 	res, err := l.Inc(context.TODO(), "k1", limit)
 	assert.Nil(t, err)
 	assert.True(t, res.Allowed)
 	assert.Equal(t, res.Remaining, int64(1))
 
-	// Key 2
+	// Unique Key 2
 	res, err = l.Inc(context.TODO(), "k2", limit)
 	assert.Nil(t, err)
 	assert.True(t, res.Allowed)
@@ -141,8 +163,14 @@ func TestKeyError(t *testing.T) {
 	l, s := flightlimit()
 	defer l.Close()
 	limit := NewLimit(10, time.Hour)
+
+	// Close redis
 	s.Close()
+
+	// Inc
 	_, err := l.Inc(context.TODO(), "test_id", limit)
+
+	// Should return error
 	assert.Error(t, err)
 }
 
@@ -155,8 +183,13 @@ func TestAsyncFlush(t *testing.T) {
 	assert.NoError(t, err)
 	assert.True(t, s.Exists(redisPrefix+k))
 
+	// Add Task to queue
 	l.addKeyToFlushQueue(redisPrefix + k)
+
+	// Wait for tasks to finish
 	l.Close()
+
+	// Key should have been deleted by the taskrunner
 	assert.False(t, s.Exists(redisPrefix+k))
 }
 

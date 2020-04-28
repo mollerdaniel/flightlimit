@@ -20,8 +20,11 @@ type rediser interface {
 
 // Limit instructions.
 type Limit struct {
+	// InFlight is the max number of InFlight before rate
+	// limit hits and requests starts failing.
 	InFlight int64
-	Timeout  time.Duration
+	// Timeout should be above the expected max runtime for a request in flight.
+	Timeout time.Duration
 }
 
 // NewLimit creates a new Limit.
@@ -56,6 +59,12 @@ func NewLimiter(rdb rediser, wg *sync.WaitGroup) *Limiter {
 
 // Close the Limiter.
 func (l *Limiter) Close() {
+	for {
+		if len(l.errFlushChan) == 0 {
+			break
+		}
+		time.Sleep(1 * time.Millisecond)
+	}
 	close(l.errFlushChan)
 	l.wg.Wait()
 }
