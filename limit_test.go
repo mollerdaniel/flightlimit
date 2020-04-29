@@ -11,27 +11,6 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func ExampleNewLimiter() {
-	mr, _ := miniredis.Run()
-	ring := redis.NewRing(&redis.RingOptions{
-		Addrs: map[string]string{"server0": mr.Addr()},
-	})
-	ctx := context.Background()
-
-	l := NewLimiter(ring, nil)
-	r, _ := l.Inc(ctx, "foo:123", NewLimit(10, time.Minute*10))
-
-	if !r.Allowed {
-		return // concurrency limit kicked in
-	}
-
-	// Process request
-	fmt.Println(r.Remaining)
-
-	l.Decr(ctx, r)
-	// Output: 9
-}
-
 func BenchmarkIncDecr(b *testing.B) {
 	l, _ := flightlimit()
 	defer l.Close()
@@ -252,4 +231,23 @@ func TestAsyncFlushMaxRetries(t *testing.T) {
 
 	// Since we didn't restart redis before expretry fuse went off the key should still exist
 	assert.True(t, s.Exists(redisPrefix+k))
+}
+
+func ExampleNewLimiter() {
+	mr, _ := miniredis.Run()
+	ring := redis.NewRing(&redis.RingOptions{
+		Addrs: map[string]string{"server0": mr.Addr()},
+	})
+	ctx := context.Background()
+
+	l := NewLimiter(ring, nil)
+	r, _ := l.Inc(ctx, "foo:123", NewLimit(10, time.Minute*10))
+
+	if !r.Allowed {
+		return
+	}
+	fmt.Println(r.Remaining)
+
+	l.Decr(ctx, r)
+	// Output: 9
 }
