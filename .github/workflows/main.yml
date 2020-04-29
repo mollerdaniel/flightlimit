@@ -1,0 +1,21 @@
+name: Codecov
+on: [push, pull_request]
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Set up Go
+      uses: actions/setup-go@v1
+      with:
+        go-version: 1.14
+    - uses: actions/checkout@v2
+    - name: test
+      run: go test ./... -race -coverprofile=coverage.txt -covermode=atomic
+    - name: Upload coverage to Codecov  
+      uses: codecov/codecov-action@v1
+      with:
+        token: ${{ secrets.CODECOV_TOKEN }}
+        file: ./coverage.txt
+        flags: unittests
+        name: flightlimit
+        fail_ci_if_error: true
