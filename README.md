@@ -1,2 +1,2 @@
 # flightlimit
-flightlimit is a in-flight (concurrency) limiter using redis inspired by go-redis/redis_rate
+flightlimit is an in-flight (concurrency) limiter using redis inspired by go-redis/redis_rate
