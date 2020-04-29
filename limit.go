@@ -40,10 +40,11 @@ type Limiter struct {
 	rdb          rediser
 	errFlushChan chan FlushTask
 	wg           *sync.WaitGroup
+	flusher      bool
 }
 
 // NewLimiter returns a new Limiter.
-func NewLimiter(rdb rediser, wg *sync.WaitGroup) *Limiter {
+func NewLimiter(rdb rediser, wg *sync.WaitGroup, enableflusher bool) *Limiter {
 	if wg == nil {
 		wg = &sync.WaitGroup{}
 	}
@@ -52,6 +53,7 @@ func NewLimiter(rdb rediser, wg *sync.WaitGroup) *Limiter {
 		rdb:          rdb,
 		errFlushChan: make(chan FlushTask, flushBufferLength),
 		wg:           wg,
+		flusher:      enableflusher,
 	}
 	go l.Flusher()
 	return l
@@ -118,6 +120,11 @@ func (l *Limiter) addKeyToFlushQueue(key string) {
 	l.addTaskToQueue(f)
 }
 
+// flusherEnabled returns if flusher is enabled.
+func (l *Limiter) flusherEnabled() bool {
+	return l.flusher
+}
+
 // IncN reports whether n events may happen at time now.
 func (l *Limiter) IncN(ctx context.Context, key string, limit *Limit, n int) (*Result, error) {
 	nkey := redisPrefix + key
@@ -133,11 +140,11 @@ func (l *Limiter) IncN(ctx context.Context, key string, limit *Limit, n int) (*R
 	}
 
 	// Result
-	cur := MaxZero(incr.Val())
+	cur := maxZero(incr.Val())
 	res := &Result{
 		Limit:     limit,
 		Allowed:   cur <= limit.InFlight,
-		Remaining: MaxZero(limit.InFlight - cur),
+		Remaining: maxZero(limit.InFlight - cur),
 		key:       nkey,
 	}
 
@@ -146,7 +153,7 @@ func (l *Limiter) IncN(ctx context.Context, key string, limit *Limit, n int) (*R
 	// To avoid blocking, we send of async failed Decr(s) to a queue.
 	if !res.Allowed {
 		err = l.Decr(ctx, res)
-		if err != nil {
+		if err != nil && l.flusherEnabled() {
 			go l.addKeyToFlushQueue(key)
 		}
 	}
@@ -216,8 +223,8 @@ type Result struct {
 	key string
 }
 
-// MaxZero returns the larger of x or 0.
-func MaxZero(x int64) int64 {
+// maxZero returns the larger of x or 0.
+func maxZero(x int64) int64 {
 	if x < 0 {
 		return 0
 	}

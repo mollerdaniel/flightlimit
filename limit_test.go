@@ -42,7 +42,7 @@ func flightlimit() (*Limiter, *miniredis.Miniredis) {
 	if err := ring.FlushDB(context.TODO()).Err(); err != nil {
 		panic(err)
 	}
-	return NewLimiter(ring, nil), mr
+	return NewLimiter(ring, nil, true), mr
 }
 
 func TestInc(t *testing.T) {

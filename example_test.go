@@ -17,7 +17,7 @@ func ExampleNewLimiter() {
 	})
 	ctx := context.Background()
 
-	l := flightlimit.NewLimiter(ring, nil)
+	l := flightlimit.NewLimiter(ring, nil, true)
 	r, _ := l.Inc(ctx, "foo:123", flightlimit.NewLimit(10, time.Minute*10))
 
 	if !r.Allowed {
