@@ -104,7 +104,7 @@ func (l *Limiter) runTask(ftask *flushTask) {
 	}
 }
 
-// Inc is shorthand for IncN(key, 1).
+// Inc is shorthand for IncN(ctx, key, 1).
 func (l *Limiter) Inc(ctx context.Context, key string, limit *Limit) (*Result, error) {
 	return l.IncN(ctx, key, limit, 1)
 }
