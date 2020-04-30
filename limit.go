@@ -41,6 +41,7 @@ type Limiter struct {
 	rdb          rediser
 	errFlushChan chan FlushTask
 	wg           *sync.WaitGroup
+	wgin         *sync.WaitGroup
 	flusher      bool
 }
 
@@ -50,6 +51,7 @@ func NewLimiter(rdb rediser, enableflusher bool) *Limiter {
 		rdb:          rdb,
 		errFlushChan: make(chan FlushTask, flushBufferLength),
 		wg:           &sync.WaitGroup{},
+		wgin:         &sync.WaitGroup{},
 		flusher:      enableflusher,
 	}
 	if l.flusherEnabled() {
@@ -68,6 +70,7 @@ func (l *Limiter) Close() {
 				break
 			}
 		}
+		l.wgin.Wait()
 		close(l.errFlushChan)
 		l.wg.Wait()
 	}
@@ -120,6 +123,7 @@ func (l *Limiter) addKeyToFlushQueue(key string) {
 		try: 0,
 	}
 	l.addTaskToQueue(f)
+	l.wgin.Done()
 }
 
 // flusherEnabled returns if flusher is enabled.
@@ -155,6 +159,7 @@ func (l *Limiter) IncN(ctx context.Context, key string, limit *Limit, n int) (*R
 	// Let Flusher repair a key with negative count due to broken state
 	if raw < 1 && l.flusherEnabled() {
 		res.n = 0
+		l.wgin.Add(1)
 		go l.addKeyToFlushQueue(key)
 		return res, nil
 	}
@@ -165,6 +170,7 @@ func (l *Limiter) IncN(ctx context.Context, key string, limit *Limit, n int) (*R
 	if !res.Allowed {
 		err = l.Decr(ctx, res)
 		if err != nil && l.flusherEnabled() {
+			l.wgin.Add(1)
 			go l.addKeyToFlushQueue(key)
 		}
 	}
