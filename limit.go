@@ -12,6 +12,7 @@ import (
 const flushRetries = 4
 const flushWaitTime = time.Second * 1
 const flushBufferLength = 10240
+const flushBufferLengthTimingMargin = 100
 const redisPrefix = "inflight:"
 
 type rediser interface {
@@ -44,31 +45,32 @@ type Limiter struct {
 }
 
 // NewLimiter returns a new Limiter.
-func NewLimiter(rdb rediser, wg *sync.WaitGroup, enableflusher bool) *Limiter {
-	if wg == nil {
-		wg = &sync.WaitGroup{}
-	}
-	wg.Add(1)
+func NewLimiter(rdb rediser, enableflusher bool) *Limiter {
 	l := &Limiter{
 		rdb:          rdb,
 		errFlushChan: make(chan FlushTask, flushBufferLength),
-		wg:           wg,
+		wg:           &sync.WaitGroup{},
 		flusher:      enableflusher,
 	}
-	go l.Flusher()
+	if l.flusherEnabled() {
+		l.wg.Add(1)
+		go l.Flusher()
+	}
 	return l
 }
 
 // Close the Limiter.
 func (l *Limiter) Close() {
-	for {
-		if len(l.errFlushChan) == 0 {
-			break
+	if l.flusherEnabled() {
+		for {
+			time.Sleep(1 * time.Millisecond)
+			if len(l.errFlushChan) == 0 {
+				break
+			}
 		}
-		time.Sleep(1 * time.Millisecond)
+		close(l.errFlushChan)
+		l.wg.Wait()
 	}
-	close(l.errFlushChan)
-	l.wg.Wait()
 }
 
 // Flusher runs as a routine to flush keys struck by redis communication
@@ -105,7 +107,7 @@ func (l *Limiter) Inc(ctx context.Context, key string, limit *Limit) (*Result, e
 
 // addTaskToQueue adds a FlushTask to the flushbuffer.
 func (l *Limiter) addTaskToQueue(f FlushTask) {
-	if len(l.errFlushChan) >= flushBufferLength-1 {
+	if len(l.errFlushChan) >= flushBufferLength-flushBufferLengthTimingMargin {
 		return
 	}
 	l.errFlushChan <- f
@@ -139,17 +141,26 @@ func (l *Limiter) IncN(ctx context.Context, key string, limit *Limit, n int) (*R
 		return &Result{}, err
 	}
 
-	// Result
-	cur := maxZero(incr.Val())
+	raw := incr.Val()
+	cur := maxZero(raw)
+
 	res := &Result{
 		Limit:     limit,
 		Allowed:   cur <= limit.InFlight,
 		Remaining: maxZero(limit.InFlight - cur),
 		key:       nkey,
+		n:         n,
 	}
 
-	// In a not Allowed scenario, we can waste an inline roundtrip to ensure performance when Allowed.
-	// This allows us to decr async if context is canceled.
+	// Let Flusher repair a key with negative count due to broken state
+	if raw < 1 && l.flusherEnabled() {
+		res.n = 0
+		go l.addKeyToFlushQueue(key)
+		return res, nil
+	}
+
+	// In a not Allowed scenario, we can waste an inline roundtrip to ensure performance
+	// when inflight limit was hit and the request is !Allowed.
 	// To avoid blocking, we send of async failed Decr(s) to a queue.
 	if !res.Allowed {
 		err = l.Decr(ctx, res)
@@ -162,22 +173,20 @@ func (l *Limiter) IncN(ctx context.Context, key string, limit *Limit, n int) (*R
 
 func (l *Limiter) delete(ctx context.Context, key string) error {
 	pipe := l.rdb.TxPipeline()
-	pipe.Del(ctx, key)
+	pipe.Del(ctx, redisPrefix+key)
 	_, err := pipe.Exec(ctx)
 	return err
 }
 
-// Decr is a shorthand for DecrN(ctx, r, 1).
+// Decr decreases inflight value, closing the in-flight.
 func (l *Limiter) Decr(ctx context.Context, r *Result) error {
-	return l.DecrN(ctx, r, 1)
-}
-
-// DecrN decreases inflight value by N.
-func (l *Limiter) DecrN(ctx context.Context, r *Result, n int) error {
+	if r.n < 1 {
+		return nil
+	}
 	pipe := l.rdb.TxPipeline()
 
 	// DECRBY + EX
-	pipe.DecrBy(ctx, r.key, int64(n))
+	pipe.DecrBy(ctx, r.key, int64(r.n))
 	pipe.Expire(ctx, r.key, r.Limit.Timeout)
 
 	_, err := pipe.Exec(ctx)
@@ -221,6 +230,9 @@ type Result struct {
 
 	// Internal key for close()
 	key string
+
+	// Internal counter for landing
+	n int
 }
 
 // maxZero returns the larger of x or 0.

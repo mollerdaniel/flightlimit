@@ -11,17 +11,23 @@ import (
 )
 
 func ExampleNewLimiter() {
-	// Setup Redis
+	// Miniredis server
 	mr, _ := miniredis.Run()
+
+	// Setup Redis
 	ring := redis.NewRing(&redis.RingOptions{
 		Addrs: map[string]string{"server0": mr.Addr()},
 	})
 
-	ctx := context.Background()
+	// Control max allowed time for flightlimit to block
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
 
-	l := flightlimit.NewLimiter(ring, nil, true)
+	// Create a new flighlimiter
+	l := flightlimit.NewLimiter(ring, true)
 
-	limit := flightlimit.NewLimit(10, time.Minute*10)
+	// Allow a maximum of 10 in-flight, with expected processing time of <= 30 Seconds
+	limit := flightlimit.NewLimit(10, 30*time.Second)
 
 	// Mark as in-flight
 	r, _ := l.Inc(ctx, "foo:123", limit)

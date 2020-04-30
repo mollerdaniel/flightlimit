@@ -11,7 +11,7 @@ import (
 )
 
 func BenchmarkIncDecr(b *testing.B) {
-	l, _ := flightlimit()
+	l, _ := flightlimit(true)
 	defer l.Close()
 	limit := NewLimit(10, time.Hour)
 
@@ -31,7 +31,7 @@ func BenchmarkIncDecr(b *testing.B) {
 	})
 }
 
-func flightlimit() (*Limiter, *miniredis.Miniredis) {
+func flightlimit(flusher bool) (*Limiter, *miniredis.Miniredis) {
 	mr, err := miniredis.Run()
 	if err != nil {
 		panic(err)
@@ -42,11 +42,11 @@ func flightlimit() (*Limiter, *miniredis.Miniredis) {
 	if err := ring.FlushDB(context.TODO()).Err(); err != nil {
 		panic(err)
 	}
-	return NewLimiter(ring, nil, true), mr
+	return NewLimiter(ring, flusher), mr
 }
 
 func TestInc(t *testing.T) {
-	l, _ := flightlimit()
+	l, _ := flightlimit(true)
 	defer l.Close()
 	limit := NewLimit(10, time.Hour)
 
@@ -67,7 +67,7 @@ func TestInc(t *testing.T) {
 }
 
 func TestKeyConflict(t *testing.T) {
-	l, _ := flightlimit()
+	l, _ := flightlimit(true)
 	defer l.Close()
 	limit := NewLimit(2, time.Hour)
 
@@ -85,7 +85,7 @@ func TestKeyConflict(t *testing.T) {
 }
 
 func TestKeyExpiry(t *testing.T) {
-	l, s := flightlimit()
+	l, s := flightlimit(true)
 	defer l.Close()
 	limit := NewLimit(10, time.Hour)
 
@@ -138,7 +138,7 @@ func TestKeyExpiry(t *testing.T) {
 }
 
 func TestKeyError(t *testing.T) {
-	l, s := flightlimit()
+	l, s := flightlimit(true)
 	defer l.Close()
 	limit := NewLimit(10, time.Hour)
 
@@ -152,9 +152,44 @@ func TestKeyError(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestDecr(t *testing.T) {
+	l, s := flightlimit(true)
+	defer l.Close()
+	limit := NewLimit(10, time.Hour)
+
+	// Inc to make the key exist
+	realres, err := l.Inc(context.TODO(), "test_id", limit)
+
+	// No error
+	assert.NoError(t, err)
+
+	// Simulate another case where result on ground (n == 0)
+	r := &Result{
+		key: "foo",
+	}
+
+	// "Land" the result
+	err = l.Decr(context.Background(), r)
+
+	// Should not result in error
+	assert.NoError(t, err)
+
+	// and the key should still be 1, not 0
+	s.CheckGet(t, redisPrefix+"test_id", "1")
+
+	// but if we later land the real result
+	err = l.Decr(context.Background(), realres)
+
+	// Should not result in error
+	assert.NoError(t, err)
+
+	// and the key should be 0
+	s.CheckGet(t, redisPrefix+"test_id", "0")
+}
+
 func TestAsyncFlush(t *testing.T) {
 	k := "test_id"
-	l, s := flightlimit()
+	l, s := flightlimit(true)
 	defer s.Close()
 	limit := NewLimit(10, time.Hour)
 	_, err := l.Inc(context.TODO(), k, limit)
@@ -162,7 +197,7 @@ func TestAsyncFlush(t *testing.T) {
 	assert.True(t, s.Exists(redisPrefix+k))
 
 	// Add Task to queue
-	l.addKeyToFlushQueue(redisPrefix + k)
+	l.addKeyToFlushQueue(k)
 
 	// Wait for tasks to finish
 	l.Close()
@@ -174,7 +209,7 @@ func TestAsyncFlush(t *testing.T) {
 func TestAsyncFlushExpRetry(t *testing.T) {
 	const flushRetries = 1
 	k := "test_id"
-	l, s := flightlimit()
+	l, s := flightlimit(true)
 	limit := NewLimit(10, time.Hour)
 
 	// Add a key
@@ -188,7 +223,7 @@ func TestAsyncFlushExpRetry(t *testing.T) {
 	s.Close()
 
 	// A Decr failed, and a key is added to the queue
-	l.addKeyToFlushQueue(redisPrefix + k)
+	l.addKeyToFlushQueue(k)
 
 	// Wait a bit
 	time.Sleep(10 * time.Millisecond)
@@ -206,7 +241,7 @@ func TestAsyncFlushExpRetry(t *testing.T) {
 func TestAsyncFlushMaxRetries(t *testing.T) {
 	const flushRetries = 1
 	k := "test_id"
-	l, s := flightlimit()
+	l, s := flightlimit(true)
 	limit := NewLimit(10, time.Hour)
 
 	// Add a key
@@ -230,4 +265,49 @@ func TestAsyncFlushMaxRetries(t *testing.T) {
 
 	// Since we didn't restart redis before expretry fuse went off the key should still exist
 	assert.True(t, s.Exists(redisPrefix+k))
+}
+
+func TestFlusherEnabled(t *testing.T) {
+	// Enabled
+	assert.Equal(t, NewLimiter(nil, true).flusherEnabled(), true)
+
+	// Disabled
+	assert.Equal(t, NewLimiter(nil, false).flusherEnabled(), false)
+}
+
+func TestInvalidFlightStateWithFlusher(t *testing.T) {
+	l, s := flightlimit(true)
+	limit := NewLimit(10, time.Hour)
+
+	// Create a scenario with negative count that shouldn't exist without crashes
+	s.Set(redisPrefix+"test_id", "-5")
+
+	// Liftoff
+	res, err := l.Inc(context.TODO(), "test_id", limit)
+
+	// In this scenario we flush instead of decr so n should be 0
+	assert.Equal(t, res.n, 0)
+
+	// No error
+	assert.NoError(t, err)
+
+	time.Sleep(1 * time.Millisecond)
+
+	// Wait for Flusher to exit
+	l.Close()
+
+	// Check that the key is reset and does not exist
+	if s.Exists(redisPrefix + "test_id") {
+		t.Fatal(redisPrefix + "test_id should not have existed anymore")
+	}
+}
+
+func TestNonBlockingTaskQueue(t *testing.T) {
+	l, _ := flightlimit(false)
+	defer l.Close()
+
+	// Injecting to queue should never block but instead drop excessive tasks
+	for i := 0; i <= flushBufferLength*2; i++ {
+		l.addTaskToQueue(FlushTask{Key: "foo"})
+	}
 }
