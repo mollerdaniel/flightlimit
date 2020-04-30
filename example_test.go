@@ -25,6 +25,7 @@ func ExampleNewLimiter() {
 
 	// Create a new flighlimiter
 	l := flightlimit.NewLimiter(ring, true)
+	defer l.Close()
 
 	// Allow a maximum of 10 in-flight, with expected processing time of <= 30 Seconds
 	limit := flightlimit.NewLimit(10, 30*time.Second)

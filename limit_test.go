@@ -66,6 +66,33 @@ func TestInc(t *testing.T) {
 	assert.Equal(t, res.Remaining, int64(0))
 }
 
+func TestIncNAndDecrCount(t *testing.T) {
+	l, s := flightlimit(true)
+	defer l.Close()
+	limit := NewLimit(20, time.Hour)
+
+	// Start with 10 in flight
+	s.Set(redisPrefix+"test_id", "10")
+
+	// Incr by 3
+	res, err := l.IncN(context.TODO(), "test_id", limit, 3)
+
+	// No errors
+	assert.NoError(t, err)
+
+	// Should have 13
+	s.CheckGet(t, redisPrefix+"test_id", "13")
+
+	// Decr
+	err = l.Decr(context.TODO(), res)
+
+	// No errors
+	assert.NoError(t, err)
+
+	// Should have 10
+	s.CheckGet(t, redisPrefix+"test_id", "10")
+}
+
 func TestKeyConflict(t *testing.T) {
 	l, _ := flightlimit(true)
 	defer l.Close()

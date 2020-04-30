@@ -56,41 +56,42 @@ func NewLimiter(rdb rediser, enableflusher bool) *Limiter {
 	}
 	if l.flusherEnabled() {
 		l.wg.Add(1)
-		go l.Flusher()
+		go l.bgflusher()
 	}
 	return l
 }
 
-// Close the Limiter.
+// Close the Limiter gracefully.
 func (l *Limiter) Close() {
 	if l.flusherEnabled() {
+		// Wait for all writes
+		l.wgin.Wait()
 		for {
-			time.Sleep(1 * time.Millisecond)
 			if len(l.errFlushChan) == 0 {
 				break
 			}
+			time.Sleep(5 * time.Millisecond)
 		}
-		l.wgin.Wait()
 		close(l.errFlushChan)
 		l.wg.Wait()
 	}
 }
 
-// Flusher runs as a routine to flush keys struck by redis communication
+// flusher runs as a routine to flush keys struck by redis communication
 // issues, to avoid incorrect limits caused by redis outtage.
-func (l *Limiter) Flusher() {
+func (l *Limiter) bgflusher() {
 	for {
 		ftask, ok := <-l.errFlushChan
 		if !ok {
 			break
 		}
-		l.RunTask(&ftask)
+		l.runTask(&ftask)
 	}
 	l.wg.Done()
 }
 
-// RunTask is a recursive function for exp backoff.
-func (l *Limiter) RunTask(ftask *FlushTask) {
+// runTask is a recursive function for exp backoff.
+func (l *Limiter) runTask(ftask *FlushTask) {
 	if ftask.Expired() {
 		return
 	}
@@ -99,7 +100,7 @@ func (l *Limiter) RunTask(ftask *FlushTask) {
 	err := l.delete(ctx, ftask.Key)
 	cancel()
 	if err != nil {
-		l.RunTask(ftask)
+		l.runTask(ftask)
 	}
 }
 
