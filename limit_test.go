@@ -292,8 +292,6 @@ func TestInvalidFlightStateWithFlusher(t *testing.T) {
 	// No error
 	assert.NoError(t, err)
 
-	time.Sleep(10 * time.Millisecond)
-
 	// Wait for Flusher to exit
 	l.Close()
 
