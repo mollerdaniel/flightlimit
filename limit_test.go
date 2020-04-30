@@ -331,9 +331,8 @@ func TestInvalidFlightStateWithFlusher(t *testing.T) {
 func TestNonBlockingTaskQueue(t *testing.T) {
 	l, _ := flightlimit(false)
 	defer l.Close()
-
 	// Injecting to queue should never block but instead drop excessive tasks
 	for i := 0; i <= flushBufferLength*2; i++ {
-		l.addTaskToQueue(FlushTask{Key: "foo"})
+		l.addTaskToQueue(flushTask{Key: "foo"})
 	}
 }

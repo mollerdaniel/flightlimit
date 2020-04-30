@@ -39,7 +39,7 @@ func NewLimit(inflight int64, timeout time.Duration) *Limit {
 // Limiter controls how frequently events are allowed to happen.
 type Limiter struct {
 	rdb          rediser
-	errFlushChan chan FlushTask
+	errFlushChan chan flushTask
 	wg           *sync.WaitGroup
 	wgin         *sync.WaitGroup
 	flusher      bool
@@ -49,7 +49,7 @@ type Limiter struct {
 func NewLimiter(rdb rediser, enableflusher bool) *Limiter {
 	l := &Limiter{
 		rdb:          rdb,
-		errFlushChan: make(chan FlushTask, flushBufferLength),
+		errFlushChan: make(chan flushTask, flushBufferLength),
 		wg:           &sync.WaitGroup{},
 		wgin:         &sync.WaitGroup{},
 		flusher:      enableflusher,
@@ -91,11 +91,11 @@ func (l *Limiter) bgflusher() {
 }
 
 // runTask is a recursive function for exp backoff.
-func (l *Limiter) runTask(ftask *FlushTask) {
-	if ftask.Expired() {
+func (l *Limiter) runTask(ftask *flushTask) {
+	if ftask.expired() {
 		return
 	}
-	ftask.BlockWait()
+	ftask.blockWait()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*2)
 	err := l.delete(ctx, ftask.Key)
 	cancel()
@@ -110,7 +110,7 @@ func (l *Limiter) Inc(ctx context.Context, key string, limit *Limit) (*Result, e
 }
 
 // addTaskToQueue adds a FlushTask to the flushbuffer.
-func (l *Limiter) addTaskToQueue(f FlushTask) {
+func (l *Limiter) addTaskToQueue(f flushTask) {
 	if len(l.errFlushChan) >= flushBufferLength-flushBufferLengthTimingMargin {
 		return
 	}
@@ -119,7 +119,7 @@ func (l *Limiter) addTaskToQueue(f FlushTask) {
 
 // addKeyToFlushQueue adds a key to the backlog flushQueue if it's not full.
 func (l *Limiter) addKeyToFlushQueue(key string) {
-	f := FlushTask{
+	f := flushTask{
 		Key: key,
 		try: 0,
 	}
@@ -201,19 +201,19 @@ func (l *Limiter) Decr(ctx context.Context, r *Result) error {
 }
 
 // FlushTask is instruction to flush an key due to failures.
-type FlushTask struct {
+type flushTask struct {
 	Key string
 	try int
 }
 
-// Expired explains if the task has exceeded it's retries.
-func (f *FlushTask) Expired() bool {
+// expired explains if the task has exceeded it's retries.
+func (f *flushTask) expired() bool {
 	return f.try >= flushRetries
 }
 
-// BlockWait adds blocking timeout for retry logic to slow down the thread,
+// blockWait adds blocking timeout for retry logic to slow down the thread,
 // and avoid bursts to a broken redis.
-func (f *FlushTask) BlockWait() {
+func (f *flushTask) blockWait() {
 	if f.try > 0 {
 		stime := int(math.Pow(2, float64(f.try)-1))
 		time.Sleep(time.Duration(stime) * time.Second)
