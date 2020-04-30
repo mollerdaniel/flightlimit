@@ -195,7 +195,7 @@ func TestAsyncFlush(t *testing.T) {
 	_, err := l.Inc(context.TODO(), k, limit)
 	assert.NoError(t, err)
 	assert.True(t, s.Exists(redisPrefix+k))
-
+	l.wgin.Add(1)
 	// Add Task to queue
 	l.addKeyToFlushQueue(k)
 
@@ -211,7 +211,7 @@ func TestAsyncFlushExpRetry(t *testing.T) {
 	k := "test_id"
 	l, s := flightlimit(true)
 	limit := NewLimit(10, time.Hour)
-
+	l.wgin.Add(1)
 	// Add a key
 	_, err := l.Inc(context.TODO(), k, limit)
 	assert.NoError(t, err)
@@ -226,7 +226,7 @@ func TestAsyncFlushExpRetry(t *testing.T) {
 	l.addKeyToFlushQueue(k)
 
 	// Wait a bit
-	time.Sleep(10 * time.Millisecond)
+	time.Sleep(1 * time.Millisecond)
 
 	// Revive redis
 	s.Start()
@@ -243,6 +243,7 @@ func TestAsyncFlushMaxRetries(t *testing.T) {
 	k := "test_id"
 	l, s := flightlimit(true)
 	limit := NewLimit(10, time.Hour)
+	l.wgin.Add(1)
 
 	// Add a key
 	_, err := l.Inc(context.TODO(), k, limit)
@@ -291,7 +292,7 @@ func TestInvalidFlightStateWithFlusher(t *testing.T) {
 	// No error
 	assert.NoError(t, err)
 
-	time.Sleep(1 * time.Millisecond)
+	time.Sleep(10 * time.Millisecond)
 
 	// Wait for Flusher to exit
 	l.Close()
