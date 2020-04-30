@@ -64,13 +64,14 @@ func NewLimiter(rdb rediser, enableflusher bool) *Limiter {
 // Close the Limiter.
 func (l *Limiter) Close() {
 	if l.flusherEnabled() {
+		// Wait for all writes
+		l.wgin.Wait()
 		for {
-			time.Sleep(1 * time.Millisecond)
 			if len(l.errFlushChan) == 0 {
 				break
 			}
+			time.Sleep(5 * time.Millisecond)
 		}
-		l.wgin.Wait()
 		close(l.errFlushChan)
 		l.wg.Wait()
 	}
