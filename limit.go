@@ -14,6 +14,7 @@ const flushWaitTime = time.Second * 1
 const flushBufferLength = 10240
 const flushBufferLengthTimingMargin = 100
 const redisPrefix = "inflight:"
+const hitlimitDecrTimeout = 2 * time.Second
 
 type rediser interface {
 	TxPipeline() redis.Pipeliner
@@ -170,15 +171,21 @@ func (l *Limiter) IncN(ctx context.Context, key string, limit *Limit, n int) (*R
 		return res, nil
 	}
 
-	// In a not Allowed scenario, we can waste an inline roundtrip to ensure performance
-	// when inflight limit was hit and the request is !Allowed.
-	// To avoid blocking, we send of async failed Decr(s) to a queue.
+	// In a not Allowed scenario, we can waste an inline roundtrip to ensure blocking
+	// is at a minimum when inflight limit was hit and the request is !Allowed.
+	// To avoid more blocking, we send of async failed Decr(s) to a queue.
 	if !res.Allowed {
-		err = l.Decr(ctx, res)
-		if err != nil && l.flusherEnabled() {
-			l.wgin.Add(1)
-			go l.addKeyToFlushQueue(key)
-		}
+		l.wgin.Add(1)
+		go func() {
+			decctx, cancel := context.WithTimeout(context.Background(), hitlimitDecrTimeout)
+			defer cancel()
+			err = l.Decr(decctx, res)
+			if err != nil && l.flusherEnabled() {
+				l.wgin.Add(1)
+				go l.addKeyToFlushQueue(key)
+			}
+			l.wgin.Done()
+		}()
 	}
 	return res, nil
 }
