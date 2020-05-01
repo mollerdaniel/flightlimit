@@ -1,28 +1,30 @@
 # flightlimit
 [![codecov](https://codecov.io/gh/mollerdaniel/flightlimit/branch/master/graph/badge.svg)](https://codecov.io/gh/mollerdaniel/flightlimit)
 [![GoDoc](https://godoc.org/github.com/mollerdaniel/flightlimit?status.svg)](https://godoc.org/github.com/mollerdaniel/flightlimit)
-[![Report](https://goreportcard.com/badge/github.com/mollerdaniel/flightlimit)](https://goreportcard.com/badge/github.com/mollerdaniel/flightlimit)
+[![Go Report Card](https://goreportcard.com/badge/github.com/mollerdaniel/flightlimit)](https://goreportcard.com/report/github.com/mollerdaniel/flightlimit)
 
 flightlimit is an in-flight (concurrency) limiter using redis inspired by go-redis/redis_rate
 
-[Docs](https://godoc.org/github.com/mollerdaniel/flightlimit) for usage
+[GoDoc](https://godoc.org/github.com/mollerdaniel/flightlimit) for usage
 
 ## Basics
 
-The basics consists of:
+The normal workflow:
 1. an atomic redis roundtrip on takeoff `Inc()`
-2. check result if limit was hit or not
-3. your processing
+2. check if result limit was hit or not, take action or go to #3
+3. normal processing
 4. land using a second atomic redis roundtrip `Dec()`
+
+In case of errors the principle is "innocent before proven guilty", we Allow instead of block.
 
 ## Flusher
 
-The optional Flusher takes care of eventual keys in incorrect state due to network or redis outtage. One example is if redis crashes after 1, leaving the state of the counter in a stale state.
+The optional Flusher takes care of keys in incorrect state due to network or redis outtage. One example is if redis crashes after step #1, leaving the state of the counter in a stale state.
 
 ## Example
 
 ```go
-// Miniredis server
+// Miniredis server for testing
 mr, _ := miniredis.Run()
 
 // Setup Redis
