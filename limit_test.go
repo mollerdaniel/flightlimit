@@ -402,10 +402,10 @@ func TestFullFlushOfQueue(t *testing.T) {
 }
 
 func TestGetTimeoutSecond(t *testing.T) {
-	assert.Equal(t, 30, NewLimit(0, 30*time.Second).GetTimeoutSecond())
-	assert.Equal(t, 1, NewLimit(0, 50*time.Millisecond).GetTimeoutSecond())
-	assert.Equal(t, 120, NewLimit(0, 2*time.Minute).GetTimeoutSecond())
-	assert.Equal(t, 3600, NewLimit(0, time.Hour).GetTimeoutSecond())
-	assert.Equal(t, 1, NewLimit(0, 1500*time.Millisecond).GetTimeoutSecond())
-	assert.Equal(t, 2, NewLimit(0, 2100*time.Millisecond).GetTimeoutSecond())
+	assert.Equal(t, 30, NewLimit(0, 30*time.Second).getTimeoutSecond())
+	assert.Equal(t, 1, NewLimit(0, 50*time.Millisecond).getTimeoutSecond())
+	assert.Equal(t, 120, NewLimit(0, 2*time.Minute).getTimeoutSecond())
+	assert.Equal(t, 3600, NewLimit(0, time.Hour).getTimeoutSecond())
+	assert.Equal(t, 1, NewLimit(0, 1500*time.Millisecond).getTimeoutSecond())
+	assert.Equal(t, 2, NewLimit(0, 2100*time.Millisecond).getTimeoutSecond())
 }

@@ -56,8 +56,8 @@ func NewLimit(inflight int64, timeout time.Duration) *Limit {
 	}
 }
 
-// GetTimeoutSecond returns the timeout as floored seconds, minimum 1.
-func (l *Limit) GetTimeoutSecond() int {
+// getTimeoutSecond returns the timeout as floored seconds, minimum 1.
+func (l *Limit) getTimeoutSecond() int {
 	v := int(l.Timeout.Seconds())
 	if v < 1 {
 		return 1
@@ -173,7 +173,7 @@ func (l *Limiter) IncN(ctx context.Context, key string, limit *Limit, n int) (*R
 	}
 
 	// Execute using one rdb-server roundtrip.
-	values := []interface{}{limit.InFlight, n, limit.GetTimeoutSecond()}
+	values := []interface{}{limit.InFlight, n, limit.getTimeoutSecond()}
 	v, err := luascript.Run(ctx, l.rdb, []string{nkey}, values...).Result()
 	if err != nil {
 		// We cannot trust failed keys, flush it
