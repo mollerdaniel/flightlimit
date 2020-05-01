@@ -168,15 +168,24 @@ func TestKeyError(t *testing.T) {
 	l, s := flightlimit(true)
 	defer l.Close()
 	limit := NewLimit(10, time.Hour)
+	k := "test_id"
 
 	// Close redis
 	s.Close()
 
 	// Inc
-	_, err := l.Inc(context.TODO(), "test_id", limit)
+	res, err := l.Inc(context.TODO(), k, limit)
 
 	// Should return error
 	assert.Error(t, err)
+
+	// And the result should still be valid
+	// N should be 0 so if we run Decr on failed Result the final value will be correct
+	assert.Equal(t, res.Allowed, true)
+	assert.Equal(t, res.n, 0)
+	assert.Equal(t, res.Limit, limit)
+	assert.Equal(t, res.key, redisPrefix+k)
+	assert.Equal(t, res.Remaining, int64(10))
 }
 
 func TestDecr(t *testing.T) {

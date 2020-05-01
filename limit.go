@@ -135,6 +135,15 @@ func (l *Limiter) flusherEnabled() bool {
 // IncN reports whether n events may happen at time now.
 func (l *Limiter) IncN(ctx context.Context, key string, limit *Limit, n int) (*Result, error) {
 	nkey := redisPrefix + key
+
+	res := &Result{
+		Limit:     limit,
+		Allowed:   true,
+		Remaining: limit.InFlight,
+		key:       nkey,
+		n:         0,
+	}
+
 	// Execute using one rdb-server roundtrip.
 	pipe := l.rdb.TxPipeline()
 
@@ -143,19 +152,15 @@ func (l *Limiter) IncN(ctx context.Context, key string, limit *Limit, n int) (*R
 	pipe.Expire(ctx, nkey, limit.Timeout)
 	_, err := pipe.Exec(ctx)
 	if err != nil {
-		return &Result{}, err
+		return res, err
 	}
 
 	raw := incr.Val()
 	cur := maxZero(raw)
 
-	res := &Result{
-		Limit:     limit,
-		Allowed:   cur <= limit.InFlight,
-		Remaining: maxZero(limit.InFlight - cur),
-		key:       nkey,
-		n:         n,
-	}
+	res.Allowed = cur <= limit.InFlight
+	res.Remaining = maxZero(limit.InFlight - cur)
+	res.n = n
 
 	// Let Flusher repair a key with negative count due to broken state
 	if raw < 1 && l.flusherEnabled() {
