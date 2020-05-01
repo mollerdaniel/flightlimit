@@ -18,12 +18,31 @@ const hitlimitDecrTimeout = 2 * time.Second
 
 type rediser interface {
 	TxPipeline() redis.Pipeliner
+	Eval(context context.Context, script string, keys []string, args ...interface{}) *redis.Cmd
+	EvalSha(context context.Context, sha1 string, keys []string, args ...interface{}) *redis.Cmd
+	ScriptExists(context context.Context, hashes ...string) *redis.BoolSliceCmd
+	ScriptLoad(context context.Context, script string) *redis.StringCmd
 }
+
+var luascript = redis.NewScript(`
+redis.replicate_commands()
+local rate_limit_key = KEYS[1]
+local maxlimit = ARGV[1]
+local incby = ARGV[2]
+local exp = ARGV[3]
+local act = redis.call("INCRBY", rate_limit_key, incby)
+redis.call("EXPIRE", rate_limit_key, tonumber(exp))
+if act > tonumber(maxlimit) then
+  local final = redis.call("DECRBY", rate_limit_key, incby)
+  redis.call("EXPIRE", rate_limit_key, tonumber(exp))
+  return {final, 0}
+end
+return {act, 1}`)
 
 // Limit instructions.
 type Limit struct {
 	// InFlight is the max number of InFlight before rate
-	// limit hits and requests starts failing.
+	// limit hits and the Limiter return not Allowed in the Result.
 	InFlight int64
 	// Timeout should be above the expected max runtime for a request in flight.
 	Timeout time.Duration
@@ -35,6 +54,15 @@ func NewLimit(inflight int64, timeout time.Duration) *Limit {
 		InFlight: inflight,
 		Timeout:  timeout,
 	}
+}
+
+// GetTimeoutSecond returns the timeout as floored seconds, minimum 1.
+func (l *Limit) GetTimeoutSecond() int {
+	v := int(l.Timeout.Seconds())
+	if v < 1 {
+		return 1
+	}
+	return v
 }
 
 // Limiter controls how frequently events are allowed to happen.
@@ -136,57 +164,43 @@ func (l *Limiter) flusherEnabled() bool {
 // IncN reports whether n events may happen at time now.
 func (l *Limiter) IncN(ctx context.Context, key string, limit *Limit, n int) (*Result, error) {
 	nkey := redisPrefix + key
-
 	res := &Result{
 		Limit:     limit,
 		Allowed:   true,
 		Remaining: limit.InFlight,
-		key:       nkey,
+		key:       key,
 		n:         0,
 	}
 
 	// Execute using one rdb-server roundtrip.
-	pipe := l.rdb.TxPipeline()
-
-	// INCRBY + EX
-	incr := pipe.IncrBy(ctx, nkey, int64(n))
-	pipe.Expire(ctx, nkey, limit.Timeout)
-	_, err := pipe.Exec(ctx)
+	values := []interface{}{limit.InFlight, n, limit.GetTimeoutSecond()}
+	v, err := luascript.Run(ctx, l.rdb, []string{nkey}, values...).Result()
 	if err != nil {
+		// We cannot trust failed keys, flush it
+		if l.flusherEnabled() {
+			l.wgin.Add(1)
+			go l.addKeyToFlushQueue(key)
+		}
 		return res, err
 	}
+	values = v.([]interface{})
 
-	raw := incr.Val()
+	raw := values[0].(int64)
+	success := values[1].(int64)
+
 	cur := maxZero(raw)
 
-	res.Allowed = cur <= limit.InFlight
+	res.Allowed = success > 0
 	res.Remaining = maxZero(limit.InFlight - cur)
 	res.n = n
 
-	// Let Flusher repair a key with negative count due to broken state
-	if raw < 1 && l.flusherEnabled() {
+	// Let Flusher repair any keys with negative count (incorrect state)
+	if res.Allowed && raw < 1 && l.flusherEnabled() {
 		res.n = 0
 		l.wgin.Add(1)
 		go l.addKeyToFlushQueue(key)
-		return res, nil
 	}
 
-	// In a not Allowed scenario, we can waste an inline roundtrip to ensure blocking
-	// is at a minimum when inflight limit was hit and the request is !Allowed.
-	// To avoid more blocking, we send of async failed Decr(s) to a queue.
-	if !res.Allowed {
-		l.wgin.Add(1)
-		go func() {
-			decctx, cancel := context.WithTimeout(context.Background(), hitlimitDecrTimeout)
-			defer cancel()
-			err = l.Decr(decctx, res)
-			if err != nil && l.flusherEnabled() {
-				l.wgin.Add(1)
-				go l.addKeyToFlushQueue(key)
-			}
-			l.wgin.Done()
-		}()
-	}
 	return res, nil
 }
 
@@ -205,10 +219,17 @@ func (l *Limiter) Decr(ctx context.Context, r *Result) error {
 	pipe := l.rdb.TxPipeline()
 
 	// DECRBY + EX
-	pipe.DecrBy(ctx, r.key, int64(r.n))
-	pipe.Expire(ctx, r.key, r.Limit.Timeout)
+	decr := pipe.DecrBy(ctx, redisPrefix+r.key, int64(r.n))
+	pipe.Expire(ctx, redisPrefix+r.key, r.Limit.Timeout)
 
 	_, err := pipe.Exec(ctx)
+
+	// Let Flusher repair any keys with negative count (incorrect state) or on failures
+	if (decr.Val() < 1 || err != nil) && l.flusherEnabled() {
+		l.wgin.Add(1)
+		go l.addKeyToFlushQueue(r.key)
+		return err
+	}
 	return err
 }
 

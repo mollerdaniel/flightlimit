@@ -50,20 +50,35 @@ func TestInc(t *testing.T) {
 	defer l.Close()
 	limit := NewLimit(10, time.Hour)
 
+	// 1 takeoff
 	res, err := l.Inc(context.TODO(), "test_id", limit)
 	assert.Nil(t, err)
 	assert.True(t, res.Allowed)
-	assert.Equal(t, res.Remaining, int64(9))
+	assert.Equal(t, int64(9), res.Remaining)
 
+	// 2 more takeoff (total of 3)
 	res, err = l.IncN(context.TODO(), "test_id", limit, 2)
 	assert.Nil(t, err)
 	assert.True(t, res.Allowed)
-	assert.Equal(t, res.Remaining, int64(7))
+	assert.Equal(t, int64(7), res.Remaining)
 
+	// 1000 won't fit, should fail and keep 3
 	res, err = l.IncN(context.TODO(), "test_id", limit, 1000)
 	assert.Nil(t, err)
 	assert.False(t, res.Allowed)
-	assert.Equal(t, res.Remaining, int64(0))
+	assert.Equal(t, int64(7), res.Remaining)
+
+	// 7 more takeoff (total of 10)
+	res, err = l.IncN(context.TODO(), "test_id", limit, 7)
+	assert.Nil(t, err)
+	assert.True(t, res.Allowed)
+	assert.Equal(t, int64(0), res.Remaining)
+
+	// 1 more takeoff (total of 11)
+	res, err = l.IncN(context.TODO(), "test_id", limit, 1)
+	assert.Nil(t, err)
+	assert.False(t, res.Allowed)
+	assert.Equal(t, int64(0), res.Remaining)
 }
 
 func TestIncNAndDecrCount(t *testing.T) {
@@ -169,11 +184,19 @@ func TestKeyExpiry(t *testing.T) {
 
 func TestKeyError(t *testing.T) {
 	l, s := flightlimit(true)
-	defer l.Close()
 	limit := NewLimit(10, time.Hour)
 	k := "test_id"
 
-	// Close redis
+	// Inc by 1
+	_, err := l.Inc(context.TODO(), k, limit)
+
+	// key should exists with value 1
+	s.CheckGet(t, redisPrefix+k, "1")
+
+	// no error
+	assert.NoError(t, err)
+
+	// Close redis to simulate failure
 	s.Close()
 
 	// Inc
@@ -184,11 +207,23 @@ func TestKeyError(t *testing.T) {
 
 	// And the result should still be valid
 	// N should be 0 so if we run Decr on failed Result the final value will be correct
-	assert.Equal(t, res.Allowed, true)
+	assert.True(t, res.Allowed)
 	assert.Equal(t, res.n, 0)
 	assert.Equal(t, res.Limit, limit)
-	assert.Equal(t, res.key, redisPrefix+k)
+	assert.Equal(t, res.key, k)
 	assert.Equal(t, res.Remaining, int64(10))
+
+	// Start redis to let the flusher remove the key
+	s.Start()
+
+	// key should exists with value 1
+	s.CheckGet(t, redisPrefix+k, "1")
+
+	// Let the flusher finish
+	l.Close()
+
+	// And the key should have been reset due to earlier failures
+	assert.False(t, s.Exists(redisPrefix+k))
 }
 
 func TestDecr(t *testing.T) {
@@ -347,4 +382,30 @@ func TestNonBlockingTaskQueue(t *testing.T) {
 	for i := 0; i <= flushBufferLength*2; i++ {
 		l.addTaskToQueue(flushTask{Key: "foo"})
 	}
+}
+
+func TestFullFlushOfQueue(t *testing.T) {
+	l, s := flightlimit(true)
+
+	// A lot injected, and spilled outside the bucket
+	for i := 0; i <= flushBufferLength*2; i++ {
+		l.addTaskToQueue(flushTask{Key: "foo" + string(1)})
+	}
+
+	// Wait for Flusher to finish
+	l.Close()
+
+	// All should be gone
+	for i := 0; i <= flushBufferLength; i++ {
+		assert.False(t, s.Exists(redisPrefix+"foo"+string(i)))
+	}
+}
+
+func TestGetTimeoutSecond(t *testing.T) {
+	assert.Equal(t, 30, NewLimit(0, 30*time.Second).GetTimeoutSecond())
+	assert.Equal(t, 1, NewLimit(0, 50*time.Millisecond).GetTimeoutSecond())
+	assert.Equal(t, 120, NewLimit(0, 2*time.Minute).GetTimeoutSecond())
+	assert.Equal(t, 3600, NewLimit(0, time.Hour).GetTimeoutSecond())
+	assert.Equal(t, 1, NewLimit(0, 1500*time.Millisecond).GetTimeoutSecond())
+	assert.Equal(t, 2, NewLimit(0, 2100*time.Millisecond).GetTimeoutSecond())
 }
