@@ -151,6 +151,9 @@ func TestKeyExpiry(t *testing.T) {
 	// close "first" one
 	err = l.Decr(context.TODO(), res)
 
+	// no error
+	assert.NoError(t, err)
+
 	// wait 59 mins
 	s.FastForward(time.Minute * 59)
 
