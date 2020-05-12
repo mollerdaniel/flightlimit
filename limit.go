@@ -192,7 +192,9 @@ func (l *Limiter) IncN(ctx context.Context, key string, limit *Limit, n int) (*R
 
 	res.Allowed = success > 0
 	res.Remaining = maxZero(limit.InFlight - cur)
-	res.n = n
+	if res.Allowed {
+		res.n = n
+	}
 
 	// Let Flusher repair any keys with negative count (incorrect state)
 	if res.Allowed && raw < 1 && l.flusherEnabled() {
