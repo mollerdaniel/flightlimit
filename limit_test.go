@@ -409,3 +409,44 @@ func TestGetTimeoutSecond(t *testing.T) {
 	assert.Equal(t, 1, NewLimit(0, 1500*time.Millisecond).getTimeoutSecond())
 	assert.Equal(t, 2, NewLimit(0, 2100*time.Millisecond).getTimeoutSecond())
 }
+
+func TestNilRediser(t *testing.T) {
+	var r *redis.Ring
+
+	l := NewLimiter(r, true)
+
+	defer l.Close()
+	limit := NewLimit(10, time.Hour)
+
+	// 1 takeoff
+	res, err := l.Inc(context.TODO(), "test_id", limit)
+	assert.Nil(t, err)
+	assert.True(t, res.Allowed)
+	assert.Equal(t, int64(10), res.Remaining)
+	err = l.Decr(context.TODO(), res)
+	assert.Nil(t, err)
+}
+
+func TestNilRediserRealNilValue(t *testing.T) {
+	l := NewLimiter(nil, true)
+
+	defer l.Close()
+	limit := NewLimit(10, time.Hour)
+
+	// 1 takeoff
+	res, err := l.Inc(context.TODO(), "test_id", limit)
+	assert.Nil(t, err)
+	assert.True(t, res.Allowed)
+	assert.Equal(t, int64(10), res.Remaining)
+	err = l.Decr(context.TODO(), res)
+	assert.Nil(t, err)
+
+	// edgecase where rediser is nil, when it wasn't nil on Inc (how? :D)
+	res.n = 1
+	err = l.Decr(context.TODO(), res)
+	assert.Nil(t, err)
+}
+
+func TestIsNil(t *testing.T) {
+	assert.Equal(t, false, isNil(string("hello")))
+}
