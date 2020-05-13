@@ -3,6 +3,7 @@ package flightlimit
 import (
 	"context"
 	"math"
+	"reflect"
 	"sync"
 	"time"
 
@@ -72,16 +73,21 @@ type Limiter struct {
 	wg           *sync.WaitGroup
 	wgin         *sync.WaitGroup
 	flusher      bool
+	enabled      bool
 }
 
 // NewLimiter returns a new Limiter.
 func NewLimiter(rdb rediser, enableflusher bool) *Limiter {
 	l := &Limiter{
+		enabled:      true,
 		rdb:          rdb,
 		errFlushChan: make(chan flushTask, flushBufferLength),
 		wg:           &sync.WaitGroup{},
 		wgin:         &sync.WaitGroup{},
 		flusher:      enableflusher,
+	}
+	if isNil(rdb) {
+		l.enabled = false
 	}
 	if l.flusherEnabled() {
 		l.wg.Add(1)
@@ -172,6 +178,10 @@ func (l *Limiter) IncN(ctx context.Context, key string, limit *Limit, n int) (*R
 		n:         0,
 	}
 
+	if !l.enabled {
+		return res, nil
+	}
+
 	// Execute using one rdb-server roundtrip.
 	values := []interface{}{limit.InFlight, n, limit.getTimeoutSecond()}
 	v, err := luascript.Run(ctx, l.rdb, []string{nkey}, values...).Result()
@@ -218,6 +228,11 @@ func (l *Limiter) Decr(ctx context.Context, r *Result) error {
 	if r.n < 1 {
 		return nil
 	}
+
+	if !l.enabled {
+		return nil
+	}
+
 	pipe := l.rdb.TxPipeline()
 
 	// DECRBY + EX
@@ -283,4 +298,15 @@ func maxZero(x int64) int64 {
 		return 0
 	}
 	return x
+}
+
+func isNil(i interface{}) bool {
+	if i == nil {
+		return true
+	}
+	switch reflect.TypeOf(i).Kind() {
+	case reflect.Ptr, reflect.Map, reflect.Array, reflect.Chan, reflect.Slice:
+		return reflect.ValueOf(i).IsNil()
+	}
+	return false
 }
