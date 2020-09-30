@@ -139,9 +139,14 @@ func (l *Limiter) runTask(ftask *flushTask) {
 	}
 }
 
-// Inc is shorthand for IncN(ctx, key, 1).
+// Inc is shorthand for IncN(ctx, key, limit, 1).
 func (l *Limiter) Inc(ctx context.Context, key string, limit *Limit) (*Result, error) {
 	return l.IncN(ctx, key, limit, 1)
+}
+
+// IncDynamic is shorthand for IncNDynamic(ctx, key, limit, 1, maxlimit).
+func (l *Limiter) IncDynamic(ctx context.Context, key string, limit *Limit, maxlimit int64) (*Result, error) {
+	return l.increaseByN(ctx, key, limit, 1, maxlimit)
 }
 
 // addTaskToQueue adds a FlushTask to the flushbuffer.
@@ -167,13 +172,23 @@ func (l *Limiter) flusherEnabled() bool {
 	return l.flusher
 }
 
+// IncNDynamic reports whether n events may happen at time now with dynamic limit.
+func (l *Limiter) IncNDynamic(ctx context.Context, key string, limit *Limit, n int, maxlimit int64) (*Result, error) {
+	return l.increaseByN(ctx, key, limit, n, maxlimit)
+}
+
 // IncN reports whether n events may happen at time now.
 func (l *Limiter) IncN(ctx context.Context, key string, limit *Limit, n int) (*Result, error) {
+	return l.increaseByN(ctx, key, limit, n, limit.InFlight)
+}
+
+// increaseByN executes the answer for whether n events may happen at time now.
+func (l *Limiter) increaseByN(ctx context.Context, key string, limit *Limit, n int, maxlimit int64) (*Result, error) {
 	nkey := redisPrefix + key
 	res := &Result{
 		Limit:     limit,
 		Allowed:   true,
-		Remaining: limit.InFlight,
+		Remaining: maxlimit,
 		key:       key,
 		n:         0,
 	}
@@ -183,7 +198,7 @@ func (l *Limiter) IncN(ctx context.Context, key string, limit *Limit, n int) (*R
 	}
 
 	// Execute using one rdb-server roundtrip.
-	values := []interface{}{limit.InFlight, n, limit.getTimeoutSecond()}
+	values := []interface{}{maxlimit, n, limit.getTimeoutSecond()}
 	v, err := luascript.Run(ctx, l.rdb, []string{nkey}, values...).Result()
 	if err != nil {
 		// We cannot trust failed keys, flush it
@@ -201,7 +216,7 @@ func (l *Limiter) IncN(ctx context.Context, key string, limit *Limit, n int) (*R
 	cur := maxZero(raw)
 
 	res.Allowed = success > 0
-	res.Remaining = maxZero(limit.InFlight - cur)
+	res.Remaining = maxZero(maxlimit - cur)
 	if res.Allowed {
 		res.n = n
 	}
