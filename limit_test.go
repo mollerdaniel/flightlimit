@@ -2,6 +2,7 @@ package flightlimit
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -78,6 +79,36 @@ func TestInc(t *testing.T) {
 	res, err = l.IncN(context.TODO(), "test_id", limit, 1)
 	assert.Nil(t, err)
 	assert.False(t, res.Allowed)
+	assert.Equal(t, int64(0), res.Remaining)
+}
+
+func TestIncDynamic(t *testing.T) {
+	l, _ := flightlimit(true)
+	defer l.Close()
+	limit := NewLimit(10, time.Hour)
+
+	// 1 takeoff
+	res, err := l.IncDynamic(context.TODO(), "test_id", limit, 10)
+	assert.Nil(t, err)
+	assert.True(t, res.Allowed)
+	assert.Equal(t, int64(9), res.Remaining)
+
+	// 2 more takeoff (total of 3)
+	res, err = l.IncNDynamic(context.TODO(), "test_id", limit, 2, 10)
+	assert.Nil(t, err)
+	assert.True(t, res.Allowed)
+	assert.Equal(t, int64(7), res.Remaining)
+
+	// 2 more takeoff should fail because we just lowered the limit to 4
+	res, err = l.IncNDynamic(context.TODO(), "test_id", limit, 2, 4)
+	assert.Nil(t, err)
+	assert.False(t, res.Allowed)
+	assert.Equal(t, int64(1), res.Remaining)
+
+	// 2 more takeoff should work because we increased the limit to 5
+	res, err = l.IncNDynamic(context.TODO(), "test_id", limit, 2, 5)
+	assert.Nil(t, err)
+	assert.True(t, res.Allowed)
 	assert.Equal(t, int64(0), res.Remaining)
 }
 
@@ -389,7 +420,7 @@ func TestFullFlushOfQueue(t *testing.T) {
 
 	// A lot injected, and spilled outside the bucket
 	for i := 0; i <= flushBufferLength*2; i++ {
-		l.addTaskToQueue(flushTask{Key: "foo" + string(1)})
+		l.addTaskToQueue(flushTask{Key: "foo" + fmt.Sprint(1)})
 	}
 
 	// Wait for Flusher to finish
@@ -397,7 +428,7 @@ func TestFullFlushOfQueue(t *testing.T) {
 
 	// All should be gone
 	for i := 0; i <= flushBufferLength; i++ {
-		assert.False(t, s.Exists(redisPrefix+"foo"+string(i)))
+		assert.False(t, s.Exists(redisPrefix+"foo"+fmt.Sprint(i)))
 	}
 }
 
