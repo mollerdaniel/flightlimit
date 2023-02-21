@@ -1,5 +1,5 @@
 # flightlimit
-[![codecov](https://codecov.io/gh/mollerdaniel/flightlimit/branch/master/graph/badge.svg)](https://codecov.io/gh/mollerdaniel/flightlimit)
+[![codecov](https://codecov.io/github/mollerdaniel/flightlimit/branch/master/graph/badge.svg?token=U4J8CZ8M52)](https://codecov.io/github/mollerdaniel/flightlimit)
 [![GoDoc](https://godoc.org/github.com/mollerdaniel/flightlimit?status.svg)](https://godoc.org/github.com/mollerdaniel/flightlimit)
 [![Go Report Card](https://goreportcard.com/badge/github.com/mollerdaniel/flightlimit)](https://goreportcard.com/report/github.com/mollerdaniel/flightlimit)
 
